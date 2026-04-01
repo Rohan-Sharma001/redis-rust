@@ -1,7 +1,40 @@
 #![allow(unused_imports)]
-use std::{io::{Read, Write}};
-use tokio::{io::AsyncWriteExt, net::{TcpListener, TcpStream}};
-use tokio::io::AsyncReadExt;
+use core::fmt;
+use std::{array, ffi::os_str::Display, fmt::{write}, io::{Read, Write}, num::ParseIntError, ptr::null, vec};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, time::Interval};
+
+#[derive(PartialEq)]
+enum DataObjects {
+    BasicString(String),
+    Error(String),
+    Integer(i64),
+    BulkString(Option<Vec<u8>>),
+    Array(Option<Vec<DataObjects>>)
+    
+}
+
+impl fmt::Display for DataObjects {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DataObjects::BasicString(str) => write!(f, "{}", str),
+            DataObjects::Error(err) => write!(f, "{}", err),
+            DataObjects::Integer(int) => write!(f, "{}", int),
+            DataObjects::BulkString(Some(arr)) => write!(f, "{}", String::from_utf8(arr.clone()).unwrap()),
+            // DataObjects::BulkString(Some(arr)) => write!(f, "{:?}", arr),
+            DataObjects::Array(Some(obj_arr)) => {
+                write!(f, "[ ");
+                for x in obj_arr {
+                    write!(f, "\x08");
+                    write!(f, "{}, ", x);
+                }
+                write!(f, "\x08\x08");
+                write!(f, "]");
+                Ok(())
+            },
+            _ => {Ok(())},
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -32,19 +65,137 @@ async fn main() {
     loop {
         let (mut socket, addr) = listener.accept().await.unwrap();
         println!{"Connected to {}", addr};
+        // connection_(socket).await;
         tokio::spawn(async move {
-            let mut buffer = [0; 4096];
-            loop {
-                let input_bytes = socket.read(&mut buffer).await.unwrap();
-                if input_bytes == 0 {
-                    // EEEEEEEE
-                    break;
-                }
-                if buffer.starts_with(b"*1\r\n$4\r\nPING\r\n") {
-                    socket.write_all(b"+PONG\r\n").await.unwrap();
-                    println!("PONG");
-                }
-            }
+            connection_(socket).await
         });
     }
+    // let mut iterator_var = 0;
+    // let test = resp_decode_value(b"*2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n", &mut iterator_var);
+    // match test {
+    //     Some(test) => println!("{}", test),
+    //     None => {},
+    // }
+}
+
+async fn connection_(mut socket: TcpStream) {
+    let mut buffer = [0; 4096];
+    loop {
+        let input_bytes = socket.read(&mut buffer).await.unwrap();
+        if input_bytes == 0 {
+            // EEEEEEEE
+            break;
+        }
+        let mut iterator_var = 0;
+        let decoded_val = match resp_decode_value(&buffer, &mut iterator_var) {
+            Some(data) => data,
+            None => break
+        };
+        println!("{}", decoded_val);
+        match decoded_val {
+            DataObjects::BasicString(val) => {
+                if val == "PING" {
+                    socket.write_all(b"PONG").await.unwrap();
+                }
+            }
+            DataObjects::Array(Some(arr)) => {
+                if arr[0] == DataObjects::BasicString("ECHO".to_string()) || arr[0] == DataObjects::BulkString(Some(b"ECHO".to_vec())){
+                    let str_to_write = format!("{}", arr[1]);
+                    socket.write_all(format!("${}\r\n{}\r\n", str_to_write.len(), str_to_write).as_bytes()).await.unwrap();
+                } else if arr[0] == DataObjects::BasicString("PING".to_string()) || arr[0] == DataObjects::BulkString(Some(b"PING".to_vec())) {
+                    socket.write_all(b"+PONG\r\n").await.unwrap();
+                }
+            }
+            _ => {},
+        }
+    }
+}
+
+fn resp_decode_value(byte_array: &[u8], iterator_var: &mut usize) -> Option<DataObjects> {
+    // let mut data_array: Vec<DataObjects> = Vec::new();
+    // let mut iterator_var = 0;
+    let n = byte_array.len();
+    while (*iterator_var < n) {
+        match byte_array[*iterator_var] as char {
+            '+'  => {
+                let mut iterator_end = *iterator_var;
+                while (iterator_end < n-1) {
+                    if byte_array[iterator_end] as char == '\r' && byte_array[iterator_end+1] as char == '\n' {break;}
+                    else {iterator_end+=1;}
+                }
+                let new_val = DataObjects::BasicString(str::from_utf8(&byte_array[*iterator_var+1..iterator_end]).unwrap().to_string());
+                *iterator_var=iterator_end+2;
+                return Some(new_val);
+            },
+            '-' => {
+                let mut iterator_end = *iterator_var;
+                while (iterator_end < n-1) {
+                    if byte_array[iterator_end] as char == '\r' && byte_array[iterator_end+1] as char == '\n' {break;}
+                    else {iterator_end+=1;}
+                }
+                let new_val = DataObjects::Error(str::from_utf8(&byte_array[*iterator_var+1..iterator_end]).unwrap().to_string());
+                *iterator_var=iterator_end+2;
+                return Some(new_val);
+            },
+            ':' => {
+                let mut iterator_end = *iterator_var;
+                while (iterator_end < n-1) {
+                    if byte_array[iterator_end] as char == '\r' && byte_array[iterator_end+1] as char == '\n' {break;}
+                    else {iterator_end+=1;}
+                }
+                let subslice = &byte_array[*iterator_var+1..iterator_end];
+                let new_val = DataObjects::Integer(str::from_utf8(subslice).unwrap().parse().unwrap());
+                *iterator_var=iterator_end+2;
+                return Some(new_val);
+            },
+            '$' => {
+                let mut iterator_end = *iterator_var;
+                while (iterator_end < n-1) {
+                    if byte_array[iterator_end] as char == '\r' && byte_array[iterator_end+1] as char == '\n' {break;}
+                    else {iterator_end+=1;}
+                }
+                let subslice = &byte_array[*iterator_var+1..iterator_end];
+                let length_buffer: i32 = str::from_utf8(subslice).unwrap().parse().unwrap();
+                let new_val = match length_buffer{
+                    -1 => DataObjects::BulkString(None),
+                    _ => DataObjects::BulkString(Some(byte_array[iterator_end+2..iterator_end+2+length_buffer as usize].to_vec()))
+                };
+                *iterator_var=iterator_end + 4 + length_buffer as usize;
+                return Some(new_val);
+            },
+            '*' => {
+
+                return resp_decode_array(byte_array, iterator_var);
+            },
+            _ => {
+                println!("TF?????, {}", iterator_var);
+            }
+        }
+    }
+    return None;
+}
+
+fn resp_decode_array(byte_array: &[u8], iterator_var: &mut usize) -> Option<DataObjects> {
+    let mut vc: Vec<DataObjects> = Vec::new();
+    let mut iterator_end = *iterator_var;
+    let n = byte_array.len();
+    while (iterator_end < n-1) {
+        if byte_array[iterator_end] as char == '\r' && byte_array[iterator_end+1] as char == '\n' {break;}
+        else {iterator_end+=1;}
+    }
+    let subslice = &byte_array[*iterator_var+1..iterator_end];
+    let length_buffer: i32 = str::from_utf8(subslice).unwrap().parse().unwrap();
+    *iterator_var = iterator_end+2;
+    if length_buffer == 0 {
+        return Some(DataObjects::Array(Some(vc)));
+    } else if length_buffer < 0 {
+        return Some(DataObjects::Array(None));
+    }
+    for i in 0..length_buffer {
+        let val = resp_decode_value(byte_array, iterator_var);
+        if let Some(x) = val {
+            vc.push(x);
+        }
+    }
+    return Some(DataObjects::Array(Some(vc)));
 }
