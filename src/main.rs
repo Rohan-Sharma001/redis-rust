@@ -1,7 +1,23 @@
 #![allow(unused_imports)]
 use core::fmt;
-use std::{array, ffi::os_str::Display, fmt::{write}, io::{Read, Write}, num::ParseIntError, ptr::null, vec};
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, time::Interval};
+use std::{array, collections::HashMap, ffi::os_str::Display, fmt::write, hash::Hash, io::{Read, Write}, num::ParseIntError, ptr::null, vec};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::oneshot, sync::mpsc, time::Interval};
+
+enum Command {
+    Get {
+        key: Vec<u8>,
+        respond_to: oneshot::Sender<Option<Vec<u8>>>,
+    },
+    Set {
+        key: Vec<u8>,
+        value: Vec<u8>,
+        respond_to: oneshot::Sender<Option<()>>,
+    },
+    Echo {
+        value: Vec<u8>,
+        respond_to: oneshot::Sender<Vec<u8>>,
+    },
+}
 
 #[derive(PartialEq)]
 enum DataObjects {
@@ -10,7 +26,17 @@ enum DataObjects {
     Integer(i64),
     BulkString(Option<Vec<u8>>),
     Array(Option<Vec<DataObjects>>)
-    
+}
+
+impl DataObjects {
+    fn as_command(&self) -> Option<&[u8]> {
+        match self {
+            DataObjects::BasicString(str) => Some(str.as_bytes()),
+            DataObjects::Error(str) => Some(str.as_bytes()),
+            DataObjects::BulkString(Some(vc)) => Some(vc),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for DataObjects {
@@ -39,8 +65,11 @@ impl fmt::Display for DataObjects {
 #[tokio::main]
 async fn main() {
     println!("Logs from your program will appear here!");
+    let mut main_dict: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
     let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
+    let (tx, rx) = mpsc::channel(32);
+    tokio::spawn(cmd_process(rx));
     //
     // for stream in listener.incoming() {
     //     match stream {
@@ -63,11 +92,12 @@ async fn main() {
     //     }
     // }
     loop {
+        let tx_copy = tx.clone();
         let (mut socket, addr) = listener.accept().await.unwrap();
         println!{"Connected to {}", addr};
         // connection_(socket).await;
         tokio::spawn(async move {
-            connection_(socket).await
+            connection_(socket, tx_copy).await
         });
     }
     // let mut iterator_var = 0;
@@ -78,7 +108,7 @@ async fn main() {
     // }
 }
 
-async fn connection_(mut socket: TcpStream) {
+async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
     let mut buffer = [0; 4096];
     loop {
         let input_bytes = socket.read(&mut buffer).await.unwrap();
@@ -95,15 +125,44 @@ async fn connection_(mut socket: TcpStream) {
         match decoded_val {
             DataObjects::BasicString(val) => {
                 if val == "PING" {
-                    socket.write_all(b"PONG").await.unwrap();
+                    // socket.write_all(b"PONG").await.unwrap();
                 }
             }
             DataObjects::Array(Some(arr)) => {
-                if arr[0] == DataObjects::BasicString("ECHO".to_string()) || arr[0] == DataObjects::BulkString(Some(b"ECHO".to_vec())){
-                    let str_to_write = format!("{}", arr[1]);
-                    socket.write_all(format!("${}\r\n{}\r\n", str_to_write.len(), str_to_write).as_bytes()).await.unwrap();
-                } else if arr[0] == DataObjects::BasicString("PING".to_string()) || arr[0] == DataObjects::BulkString(Some(b"PING".to_vec())) {
+                if arr[0].as_command() == Some(b"ECHO") {
+                    let value = format!("{}", arr[1]);
+                    // socket.write_all(format!("${}\r\n{}\r\n", str_to_write.len(), str_to_write).as_bytes()).await.unwrap();
+                    let (response_tx, response_rx) = oneshot::channel();
+                    let cmd = Command::Echo { value: value.as_bytes().to_vec(), respond_to: response_tx };
+                    tx.send(cmd).await.unwrap();
+                    let res = response_rx.await.unwrap();
+
+                    let bs = [format!("${}\r\n", res.len()).as_bytes() , res.as_slice() , b"\r\n"].concat();
+                    socket.write_all(bs.as_slice()).await.unwrap();
+                } else if arr[0].as_command() == Some(b"PING") {
                     socket.write_all(b"+PONG\r\n").await.unwrap();
+                } else if arr[0].as_command() == Some(b"SET") {
+                    // if arr.len() != 3 {
+                    //     println!("Expected 2 argument");
+                    // }
+                    if let Some(key) = arr[1].as_command() && let Some(value) = arr[2].as_command() {
+                        let (response_tx, response_rx) = oneshot::channel();
+                        let cmd = Command::Set { key: key.to_vec(), value: value.to_vec(), respond_to: response_tx };
+                        tx.send(cmd).await.unwrap();
+                        let res = response_rx.await.unwrap();
+
+                        socket.write_all(b"+OK\r\n").await.unwrap();
+                    }
+                } else if arr[0].as_command() == Some(b"GET") {
+                    let (response_tx, response_rx) = oneshot::channel();
+                    if let Some(key) = arr[1].as_command() {
+                        let cmd = Command::Get { key: key.to_vec(), respond_to: response_tx };
+                        tx.send(cmd).await.unwrap();
+                        let res = response_rx.await.unwrap().unwrap();
+                        let bs = [format!("${}\r\n", res.len()).as_bytes() , res.as_slice() , b"\r\n"].concat();
+                        socket.write_all(bs.as_slice()).await.unwrap();
+                    }
+                    
                 }
             }
             _ => {},
@@ -198,4 +257,24 @@ fn resp_decode_array(byte_array: &[u8], iterator_var: &mut usize) -> Option<Data
         }
     }
     return Some(DataObjects::Array(Some(vc)));
+}
+
+async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
+    let mut dict: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+
+    while let Some(cmd) = rx.recv().await {
+        match cmd {
+            Command::Get {key, respond_to}=> {
+                let val = dict.get(&key).cloned();
+                let _ = respond_to.send(val);
+            },
+            Command::Set {key, value, respond_to} => {
+                dict.insert(key, value);
+                let _ = respond_to.send(Some(()));
+            },
+            Command::Echo {value, respond_to} => {
+                let _ = respond_to.send(value);
+            }
+        }
+    }
 }
