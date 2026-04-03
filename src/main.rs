@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 use core::fmt;
-use std::{array, collections::HashMap, ffi::os_str::Display, fmt::write, hash::Hash, io::{Read, Write}, num::ParseIntError, ptr::null, vec};
+use std::{array, collections::HashMap, ffi::os_str::Display, fmt::write, hash::Hash, io::{Read, Write}, num::ParseIntError, ptr::null, time::Duration, vec};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::oneshot, sync::mpsc, time::Interval};
 
 enum Command {
@@ -11,6 +11,7 @@ enum Command {
     Set {
         key: Vec<u8>,
         value: Vec<u8>,
+        life: Option<std::time::Duration>,
         respond_to: oneshot::Sender<Option<()>>,
     },
     Echo {
@@ -147,7 +148,25 @@ async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     // }
                     if let Some(key) = arr[1].as_command() && let Some(value) = arr[2].as_command() {
                         let (response_tx, response_rx) = oneshot::channel();
-                        let cmd = Command::Set { key: key.to_vec(), value: value.to_vec(), respond_to: response_tx };
+                        let cmd;
+                        if arr.len() >= 5 {
+                            let duration_: f32 = str::from_utf8(arr[4].as_command().unwrap()).unwrap().parse().unwrap();
+                            match arr[3].as_command() {
+                                Some(b"EX") => {
+                                    cmd = Command::Set { key: key.to_vec(), value: value.to_vec(), life: Some(std::time::Duration::from_secs_f32(duration_)), respond_to: response_tx };
+                                },
+                                Some(b"PX") => {
+                                    cmd = Command::Set { key: key.to_vec(), value: value.to_vec(), life: Some(std::time::Duration::from_millis(duration_ as u64)), respond_to: response_tx };
+                                },
+                                _ => {
+                                    cmd = Command::Set { key: key.to_vec(), value: value.to_vec(), life: None, respond_to: response_tx };
+                                }
+                            }
+                        } else {
+                            cmd = Command::Set { key: key.to_vec(), value: value.to_vec(), life: None, respond_to: response_tx };
+                        }
+
+                        // let cmd = Command::Set { key: key.to_vec(), value: value.to_vec(), respond_to: response_tx };
                         tx.send(cmd).await.unwrap();
                         let res = response_rx.await.unwrap();
 
@@ -158,9 +177,17 @@ async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     if let Some(key) = arr[1].as_command() {
                         let cmd = Command::Get { key: key.to_vec(), respond_to: response_tx };
                         tx.send(cmd).await.unwrap();
-                        let res = response_rx.await.unwrap().unwrap();
-                        let bs = [format!("${}\r\n", res.len()).as_bytes() , res.as_slice() , b"\r\n"].concat();
-                        socket.write_all(bs.as_slice()).await.unwrap();
+                        let res = response_rx.await.unwrap();
+                        match res {
+                            Some(res) => {
+                                let bs = [format!("${}\r\n", res.len()).as_bytes() , res.as_slice() , b"\r\n"].concat();
+                                socket.write_all(bs.as_slice()).await.unwrap();
+                            },
+                            None => {
+                                socket.write_all(b"$-1\r\n").await.unwrap();
+                            }
+                        }
+                        
                     }
                     
                 }
@@ -260,16 +287,36 @@ fn resp_decode_array(byte_array: &[u8], iterator_var: &mut usize) -> Option<Data
 }
 
 async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
-    let mut dict: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
-
+    let mut dict: HashMap<Vec<u8>, (Vec<u8>, Option<std::time::Instant>)> = HashMap::new();
     while let Some(cmd) = rx.recv().await {
+        let now_ts = std::time::Instant::now();
         match cmd {
             Command::Get {key, respond_to}=> {
-                let val = dict.get(&key).cloned();
-                let _ = respond_to.send(val);
+                let val_pair = dict.get(&key).cloned();
+                match val_pair {
+                    Some((val, Some(ts))) => {
+                        println!("{:?}....{:?}", now_ts, ts);
+                        if now_ts > ts {
+                            let _ = respond_to.send(None);
+                        } else {
+                            let _ = respond_to.send(Some(val));
+                        }
+                    },
+                    Some((val, None)) => {
+                        let _ = respond_to.send(Some(val));
+                    }
+                    None => {
+                        let _ = respond_to.send(None);
+                    }
+                }
+                // let _ = respond_to.send(val);
             },
-            Command::Set {key, value, respond_to} => {
-                dict.insert(key, value);
+            Command::Set {key, value, life, respond_to} => {
+                // dict.insert(key, (value, now_ts + life));
+                match life {
+                    Some(life) => dict.insert(key, (value, Some(now_ts + life))),
+                    None => dict.insert(key, (value, None)),
+                };
                 let _ = respond_to.send(Some(()));
             },
             Command::Echo {value, respond_to} => {
