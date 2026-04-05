@@ -22,7 +22,13 @@ enum Command {
         list_name: Vec<u8>,
         value_list: Vec<Vec<u8>>,
         respond_to: oneshot::Sender<usize>
-    }
+    },
+    LRange {
+        list_name: Vec<u8>,
+        start_index: i32,
+        end_index: i32,
+        respond_to: oneshot::Sender<Vec<u8>>
+    } 
 }
 
 #[derive(PartialEq)]
@@ -196,7 +202,7 @@ async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     }
                     
                 } else if arr[0].as_command() == Some(b"RPUSH") && arr.len() > 2 {
-                    let list_name = format!("{}", arr[0]);
+                    let list_name = format!("{}", arr[1]);
                     let mut value_list = Vec::<Vec<u8>>::new();
                     for i in 2..arr.len() {
                         value_list.push(arr[i].as_command().unwrap().to_vec());
@@ -206,6 +212,15 @@ async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     tx.send(cmd).await.unwrap();
                     let res = response_rx.await.unwrap();
                     socket.write_all(format!(":{}\r\n", res).as_bytes()).await.unwrap();
+                } else if arr[0].as_command() == Some(b"LRANGE") && arr.len() > 3 {
+                    let list_name = arr[1].as_command().clone().unwrap().to_vec();
+                    let start_index: i32 = str::from_utf8(arr[2].as_command().unwrap()).unwrap().parse().unwrap();
+                    let end_index: i32 = str::from_utf8(arr[3].as_command().unwrap()).unwrap().parse().unwrap();
+                    let (response_tx, response_rx) = oneshot::channel();
+                    let cmd = Command::LRange { list_name: list_name, start_index, end_index, respond_to: response_tx };
+                    tx.send(cmd).await.unwrap();
+                    let res = response_rx.await.unwrap();
+                    socket.write_all(res.as_slice()).await.unwrap();
                 }
             }
             _ => {},
@@ -347,6 +362,33 @@ async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                     println!("{:?}", x);
                 }
                 let _ = respond_to.send(dict_list.entry(list_name.clone()).or_default().len());
+            },
+            Command::LRange { list_name, start_index, end_index, respond_to } => {
+                match dict_list.get(&list_name) {
+                    Some(list) => {
+                        if start_index >= list.len() as i32 || start_index > end_index {
+                            let _ = respond_to.send(b"*0\r\n".to_vec());
+                        } else {
+                            let e_index = std::cmp::min(end_index, (list.len()-1) as i32);
+                            let mut return_str = Vec::<u8>::new();
+                            write!(&mut return_str, "*{}\r\n", e_index - start_index + 1).unwrap();
+                            for (ind,it) in list.iter().enumerate() {
+                                if ind as i32 > e_index {break};
+                                if ind as i32 >= start_index {
+                                    let mut tmp_buf: Vec<u8> = Vec::new();
+                                    write!(&mut tmp_buf, "${}\r\n", it.len()).unwrap();
+                                    tmp_buf.extend_from_slice(it);
+                                    tmp_buf.extend_from_slice(b"\r\n");
+                                    return_str.extend_from_slice(&tmp_buf);
+                                }
+                            }
+                            let _ = respond_to.send(return_str);
+                        }
+                    },
+                    None => {
+                        let _ = respond_to.send(b"*0\r\n".to_vec());
+                    }
+                }
             }
         }
     }
