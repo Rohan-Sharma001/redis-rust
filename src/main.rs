@@ -363,17 +363,33 @@ async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                 }
                 let _ = respond_to.send(dict_list.entry(list_name.clone()).or_default().len());
             },
-            Command::LRange { list_name, start_index, end_index, respond_to } => {
+            Command::LRange { list_name, mut start_index, mut end_index, respond_to } => {
                 match dict_list.get(&list_name) {
                     Some(list) => {
-                        if start_index >= list.len() as i32 || start_index > end_index {
+                        let n = list.len() as i32;
+                        if start_index < -1*n {
+                            start_index = 0;
+                        }
+                        if end_index < -1*n {
+                            end_index = 0;
+                        }
+                        if end_index >= n {
+                            end_index = n-1;
+                        }
+                        if start_index >= list.len() as i32 {
+                            let _ = respond_to.send(b"*0\r\n".to_vec());
+                            return;
+                        }
+                        start_index = ((start_index % n)+n)%n;
+                        end_index = ((end_index % n)+n)%n;
+                        if start_index > end_index {
                             let _ = respond_to.send(b"*0\r\n".to_vec());
                         } else {
-                            let e_index = std::cmp::min(end_index, (list.len()-1) as i32);
+                            // let e_index = std::cmp::min(end_index, (list.len()-1) as i32);
                             let mut return_str = Vec::<u8>::new();
-                            write!(&mut return_str, "*{}\r\n", e_index - start_index + 1).unwrap();
+                            write!(&mut return_str, "*{}\r\n", end_index - start_index + 1).unwrap();
                             for (ind,it) in list.iter().enumerate() {
-                                if ind as i32 > e_index {break};
+                                if ind as i32 > end_index {break};
                                 if ind as i32 >= start_index {
                                     let mut tmp_buf: Vec<u8> = Vec::new();
                                     write!(&mut tmp_buf, "${}\r\n", it.len()).unwrap();
