@@ -28,7 +28,12 @@ enum Command {
         start_index: i32,
         end_index: i32,
         respond_to: oneshot::Sender<Vec<u8>>
-    } 
+    },
+    LPUSH {
+        list_name: Vec<u8>,
+        value_list: Vec<Vec<u8>>,
+        respond_to: oneshot::Sender<usize>
+    }
 }
 
 #[derive(PartialEq)]
@@ -212,6 +217,17 @@ async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     tx.send(cmd).await.unwrap();
                     let res = response_rx.await.unwrap();
                     socket.write_all(format!(":{}\r\n", res).as_bytes()).await.unwrap();
+                }else if arr[0].as_command() == Some(b"LPUSH") && arr.len() > 2 {
+                    let list_name = format!("{}", arr[1]);
+                    let mut value_list = Vec::<Vec<u8>>::new();
+                    for i in 2..arr.len() {
+                        value_list.push(arr[i].as_command().unwrap().to_vec());
+                    }
+                    let (response_tx, response_rx) = oneshot::channel();
+                    let cmd = Command::LPUSH { list_name: list_name.as_bytes().to_vec(), value_list: value_list, respond_to: response_tx };
+                    tx.send(cmd).await.unwrap();
+                    let res = response_rx.await.unwrap();
+                    socket.write_all(format!(":{}\r\n", res).as_bytes()).await.unwrap();
                 } else if arr[0].as_command() == Some(b"LRANGE") && arr.len() > 3 {
                     let list_name = arr[1].as_command().clone().unwrap().to_vec();
                     let start_index: i32 = str::from_utf8(arr[2].as_command().unwrap()).unwrap().parse().unwrap();
@@ -357,6 +373,16 @@ async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                 dict_list.entry(list_name.clone()).or_insert(LinkedList::new());
                 for str_ in value_list {
                     dict_list.entry(list_name.clone()).or_default().push_back(str_);
+                }
+                for x in dict_list.get(&list_name) {
+                    println!("{:?}", x);
+                }
+                let _ = respond_to.send(dict_list.entry(list_name.clone()).or_default().len());
+            },
+            Command::LPUSH { list_name, value_list, respond_to } => {
+                dict_list.entry(list_name.clone()).or_insert(LinkedList::new());
+                for str_ in value_list {
+                    dict_list.entry(list_name.clone()).or_default().push_front(str_);
                 }
                 for x in dict_list.get(&list_name) {
                     println!("{:?}", x);
