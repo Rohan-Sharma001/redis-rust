@@ -33,6 +33,10 @@ enum Command {
         list_name: Vec<u8>,
         value_list: Vec<Vec<u8>>,
         respond_to: oneshot::Sender<usize>
+    },
+    LLen {
+        list_name: Vec<u8>,
+        respond_to: oneshot::Sender<usize>
     }
 }
 
@@ -203,9 +207,7 @@ async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                                 socket.write_all(b"$-1\r\n").await.unwrap();
                             }
                         }
-                        
                     }
-                    
                 } else if arr[0].as_command() == Some(b"RPUSH") && arr.len() > 2 {
                     let list_name = format!("{}", arr[1]);
                     let mut value_list = Vec::<Vec<u8>>::new();
@@ -237,6 +239,15 @@ async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     tx.send(cmd).await.unwrap();
                     let res = response_rx.await.unwrap();
                     socket.write_all(res.as_slice()).await.unwrap();
+                } else if arr[0].as_command() == Some(b"LLEN") && arr.len() > 1 {
+                    let list_name = arr[1].as_command().clone().unwrap().to_vec();
+                    let (response_tx, response_rx) = oneshot::channel();
+                    let cmd = Command::LLen { list_name, respond_to: response_tx };
+                    tx.send(cmd).await.unwrap();
+                    let res = response_rx.await.unwrap();
+                    let mut buf = Vec::<u8>::new();
+                    write!(&mut buf, ":{}\r\n", res);
+                    socket.write_all(&buf).await.unwrap();
                 }
             }
             _ => {},
@@ -430,6 +441,14 @@ async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                     None => {
                         let _ = respond_to.send(b"*0\r\n".to_vec());
                     }
+                }
+            },
+            Command::LLen { list_name, respond_to } => {
+                match dict_list.get(&list_name) {
+                    Some(list_name) => {
+                        let _ = respond_to.send(list_name.len());
+                    },
+                    None => {let _ = respond_to.send(0);}
                 }
             }
         }
