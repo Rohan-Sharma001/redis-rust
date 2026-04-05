@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 use core::fmt;
-use std::{array, collections::HashMap, ffi::os_str::Display, fmt::write, hash::Hash, io::{Read, Write}, num::ParseIntError, ptr::null, time::Duration, vec};
+use std::{array, collections::{HashMap, LinkedList}, ffi::os_str::Display, fmt::write, hash::Hash, io::{Read, Write}, num::ParseIntError, ptr::null, time::Duration, vec};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::oneshot, sync::mpsc, time::Interval};
 
 enum Command {
@@ -18,6 +18,11 @@ enum Command {
         value: Vec<u8>,
         respond_to: oneshot::Sender<Vec<u8>>,
     },
+    RPUSH {
+        list_name: Vec<u8>,
+        value_list: Vec<Vec<u8>>,
+        respond_to: oneshot::Sender<usize>
+    }
 }
 
 #[derive(PartialEq)]
@@ -190,6 +195,17 @@ async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                         
                     }
                     
+                } else if arr[0].as_command() == Some(b"RPUSH") && arr.len() > 2 {
+                    let list_name = format!("{}", arr[0]);
+                    let mut value_list = Vec::<Vec<u8>>::new();
+                    for i in 2..arr.len() {
+                        value_list.push(arr[i].as_command().unwrap().to_vec());
+                    }
+                    let (response_tx, response_rx) = oneshot::channel();
+                    let cmd = Command::RPUSH { list_name: list_name.as_bytes().to_vec(), value_list: value_list, respond_to: response_tx };
+                    tx.send(cmd).await.unwrap();
+                    let res = response_rx.await.unwrap();
+                    socket.write_all(format!(":{}\r\n", res).as_bytes()).await.unwrap();
                 }
             }
             _ => {},
@@ -288,6 +304,7 @@ fn resp_decode_array(byte_array: &[u8], iterator_var: &mut usize) -> Option<Data
 
 async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
     let mut dict: HashMap<Vec<u8>, (Vec<u8>, Option<std::time::Instant>)> = HashMap::new();
+    let mut dict_list: HashMap<Vec<u8>, LinkedList<Vec<u8>>> = HashMap::new();
     while let Some(cmd) = rx.recv().await {
         let now_ts = std::time::Instant::now();
         match cmd {
@@ -309,7 +326,6 @@ async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                         let _ = respond_to.send(None);
                     }
                 }
-                // let _ = respond_to.send(val);
             },
             Command::Set {key, value, life, respond_to} => {
                 // dict.insert(key, (value, now_ts + life));
@@ -321,6 +337,16 @@ async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
             },
             Command::Echo {value, respond_to} => {
                 let _ = respond_to.send(value);
+            },
+            Command::RPUSH { list_name, value_list, respond_to } => {
+                dict_list.entry(list_name.clone()).or_insert(LinkedList::new());
+                for str_ in value_list {
+                    dict_list.entry(list_name.clone()).or_default().push_back(str_);
+                }
+                for x in dict_list.get(&list_name) {
+                    println!("{:?}", x);
+                }
+                let _ = respond_to.send(dict_list.entry(list_name.clone()).or_default().len());
             }
         }
     }
