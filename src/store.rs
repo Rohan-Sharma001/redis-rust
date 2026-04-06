@@ -1,11 +1,12 @@
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::oneshot, sync::mpsc, time::Interval};
-use std::{collections::HashMap, io::Write};
+use std::{collections::{HashMap, VecDeque}, io::Write, time::{self, Instant}};
 use crate::{command::Command, resp};
 use std::collections::LinkedList;
 
 pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
     let mut dict: HashMap<Vec<u8>, (Vec<u8>, Option<std::time::Instant>)> = HashMap::new();
     let mut dict_list: HashMap<Vec<u8>, LinkedList<Vec<u8>>> = HashMap::new();
+    let mut waiters: HashMap<Vec<u8>, VecDeque<(Option<std::time::Instant>, oneshot::Sender<Vec<u8>>)>> = HashMap::new(); //store BLPOP requests
     while let Some(cmd) = rx.recv().await {
         let now_ts = std::time::Instant::now();
         match cmd {
@@ -48,6 +49,28 @@ pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                     println!("{:?}", x);
                 }
                 let _ = respond_to.send(dict_list.entry(list_name.clone()).or_default().len());
+
+                match waiters.get_mut(&list_name) {
+                    Some(dq) if dq.len() > 0 => {
+                        let (ts, rsp_to) = dq.pop_back().unwrap();
+                        if let Some(exp_time) = ts && exp_time > Instant::now() {
+                            let _ = rsp_to.send(b"$-1\r\n".to_vec());
+                        } else {
+                            let mut buffer = Vec::<u8>::new();
+                            write!(&mut buffer, "*2\r\n${}\r\n", list_name.len());
+                            buffer.extend_from_slice(&list_name);
+                            buffer.extend_from_slice(b"\r\n");
+                            let mut tmp_buff = Vec::<u8>::new();
+                            write!(&mut tmp_buff, "${}\r\n", dict_list.get(&list_name).unwrap().front().unwrap().len());
+                            tmp_buff.extend_from_slice(dict_list.get(&list_name).unwrap().front().unwrap());
+                            tmp_buff.extend_from_slice(b"\r\n");
+                            dict_list.get_mut(&list_name).unwrap().pop_front().unwrap();
+                            buffer.extend_from_slice(&tmp_buff);
+                            let k = rsp_to.send(buffer);
+                        }
+                    },
+                    _ => {}
+                }
             },
             Command::LPUSH { list_name, value_list, respond_to } => {
                 dict_list.entry(list_name.clone()).or_insert(LinkedList::new());
@@ -146,7 +169,15 @@ pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                     },
                     None => {let _ = respond_to.send(b"".to_vec());}
                 }
-            }
+            },
+            Command::BLPOP { list_name, exp_time, respond_to } => {
+                let now_ts = std::time::Instant::now();
+                let fin_time = match exp_time {
+                    Some(e_t) => Some(now_ts + e_t),
+                    None => None
+                };
+                waiters.entry(list_name).or_insert(VecDeque::new()).push_front((fin_time, respond_to));
+            }    
         }
     }
 }

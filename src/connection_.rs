@@ -1,4 +1,5 @@
-use std::io::Write;
+use core::time;
+use std::{io::Write, time::Duration};
 
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::oneshot, sync::mpsc, time::Interval};
 use crate::command::Command;
@@ -95,6 +96,7 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     tx.send(cmd).await.unwrap();
                     let res = response_rx.await.unwrap();
                     socket.write_all(format!(":{}\r\n", res).as_bytes()).await.unwrap();
+                    
                 }else if arr[0].as_command() == Some(b"LPUSH") && arr.len() > 2 {
                     let list_name = format!("{}", arr[1]);
                     let mut value_list = Vec::<Vec<u8>>::new();
@@ -133,6 +135,18 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                         None => None
                     };
                     let cmd  = Command::LPOP { list_name, no_of_elements: no_of_elements, respond_to: response_tx };
+                    tx.send(cmd).await.unwrap();
+                    let res = response_rx.await.unwrap();
+                    socket.write_all(&res).await.unwrap();
+                } else if arr[0].as_command() == Some(b"BLPOP") && arr.len() > 1 {
+                    let list_name = arr[1].as_command().clone().unwrap().to_vec();
+                    let (response_tx, response_rx) = oneshot::channel();
+                    
+                    let exp_time = match str::from_utf8(arr[2].as_command().unwrap()).unwrap().parse::<f32>().unwrap() {
+                        0.0 => None,
+                        s => Some(Duration::from_secs_f32(s))
+                    }; 
+                    let cmd  = Command::BLPOP { list_name, exp_time, respond_to: response_tx };
                     tx.send(cmd).await.unwrap();
                     let res = response_rx.await.unwrap();
                     socket.write_all(&res).await.unwrap();

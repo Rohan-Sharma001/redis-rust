@@ -38,5 +38,10 @@ pub enum Command {
         list_name: Vec<u8>,
         no_of_elements: Option<i32>,
         respond_to: oneshot::Sender<Vec<u8>>
+    },
+    BLPOP {
+        list_name: Vec<u8>,
+        exp_time: Option<std::time::Duration>,
+        respond_to: oneshot::Sender<Vec<u8>>
     }
 }
