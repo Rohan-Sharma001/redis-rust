@@ -127,20 +127,15 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                 } else if arr[0].as_command() == Some(b"LPOP") && arr.len() > 1 {
                     let list_name = arr[1].as_command().clone().unwrap().to_vec();
                     let (response_tx, response_rx) = oneshot::channel();
-                    let cmd  = Command::LPOP { list_name, respond_to: response_tx };
+                    
+                    let no_of_elements = match arr.get(2) {
+                        Some(e) => Some(str::from_utf8(e.as_command().unwrap()).unwrap().parse().unwrap()),
+                        None => None
+                    };
+                    let cmd  = Command::LPOP { list_name, no_of_elements: no_of_elements, respond_to: response_tx };
                     tx.send(cmd).await.unwrap();
                     let res = response_rx.await.unwrap();
-                    match res.len() {
-                        0 => {socket.write_all(b"$-1\r\n").await.unwrap();}
-                        int => {
-                            let mut buf = Vec::<u8>::new();
-                            write!(&mut buf, "${}\r\n", res.len());
-                            buf.extend_from_slice(&res);
-                            buf.extend_from_slice(b"\r\n");
-
-                            socket.write_all(&buf).await.unwrap();
-                        }
-                    }
+                    socket.write_all(&res).await.unwrap();
                 }
             }
             _ => {},

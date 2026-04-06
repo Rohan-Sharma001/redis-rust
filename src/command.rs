@@ -36,6 +36,7 @@ pub enum Command {
     },
     LPOP {
         list_name: Vec<u8>,
+        no_of_elements: Option<i32>,
         respond_to: oneshot::Sender<Vec<u8>>
     }
 }

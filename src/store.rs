@@ -110,14 +110,39 @@ pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                     None => {let _ = respond_to.send(0);}
                 }
             },
-            Command::LPOP { list_name, respond_to } => {
+            Command::LPOP { list_name, no_of_elements, respond_to } => {
                 match dict_list.get_mut(&list_name) {
                     Some(ls) => {
-                        let q = ls.pop_front();
-                        match q {
-                            Some(val) => {let _ = respond_to.send(val);},
-                            None => {let _ = respond_to.send(b"".to_vec());}
+                        if ls.len() == 0 {
+                            let _ = respond_to.send(b"$-1\r\n".to_vec());
+                            return;
                         }
+                        let mut buf = Vec::<u8>::new();
+                        match no_of_elements {
+                            Some(n) => {
+                                write!(&mut buf, "*{}\r\n", n);
+                                for i in 0..n {
+                                    let p = ls.pop_front().unwrap();
+                                    let mut tmp_buf = Vec::<u8>::new();
+                                    write!(&mut tmp_buf, "${}\r\n", p.len());
+                                    tmp_buf.extend_from_slice(p.as_slice());
+                                    tmp_buf.extend_from_slice(b"\r\n");
+                                    buf.extend_from_slice(&tmp_buf);
+                                }
+                            }
+                            None => {
+                                let q = ls.pop_front();
+                                match q {
+                                    Some(vc) => {
+                                        write!(&mut buf, "${}\r\n", vc.len());
+                                        buf.extend_from_slice(vc.as_slice());
+                                        buf.extend_from_slice(b"\r\n");
+                                    }
+                                    None => write!(&mut buf, "-1\r\n").unwrap()
+                                }
+                            }
+                        }
+                        let _ = respond_to.send(buf);
                     },
                     None => {let _ = respond_to.send(b"".to_vec());}
                 }
