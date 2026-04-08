@@ -3,7 +3,7 @@ use core::fmt;
 pub enum DataObjects {
     BasicString(String),
     Error(String),
-    Integer(i64),
+    Integer(f64),
     BulkString(Option<Vec<u8>>),
     Array(Option<Vec<DataObjects>>)
 }

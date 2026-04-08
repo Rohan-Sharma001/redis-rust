@@ -3,8 +3,9 @@ use crate::resp::value::DataObjects;
 pub fn resp_decode_value(byte_array: &[u8], iterator_var: &mut usize) -> Option<DataObjects> {
     // let mut data_array: Vec<DataObjects> = Vec::new();
     // let mut iterator_var = 0;
+    let stt = str::from_utf8(byte_array);
     let n = byte_array.len();
-    while (*iterator_var < n) {
+    while *iterator_var < n {
         match byte_array[*iterator_var] as char {
             '+'  => {
                 let mut iterator_end = *iterator_var;
@@ -57,7 +58,7 @@ pub fn resp_decode_value(byte_array: &[u8], iterator_var: &mut usize) -> Option<
                 return resp_decode_array(byte_array, iterator_var);
             },
             _ => {
-                println!("TF?????, {}", iterator_var);
+                //println!("TF?????, {}", iterator_var);
             }
         }
     }

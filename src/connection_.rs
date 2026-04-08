@@ -142,14 +142,20 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     let list_name = arr[1].as_command().clone().unwrap().to_vec();
                     let (response_tx, response_rx) = oneshot::channel();
                     
-                    let exp_time = match str::from_utf8(arr[2].as_command().unwrap()).unwrap().parse::<f32>().unwrap() {
+                    let exp_time = match str::from_utf8(arr[2].as_command().
+                    unwrap())
+                    .unwrap()
+                    .parse::<f32>()
+                    .unwrap() {
                         0.0 => None,
                         s => Some(Duration::from_secs_f32(s))
                     }; 
                     let cmd  = Command::BLPOP { list_name, exp_time, respond_to: response_tx };
                     tx.send(cmd).await.unwrap();
+                    
                     let res = response_rx.await.unwrap();
                     socket.write_all(&res).await.unwrap();
+                    println!("bbbb");
                 }
             }
             _ => {},
