@@ -32,7 +32,7 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     // socket.write_all(format!("${}\r\n{}\r\n", str_to_write.len(), str_to_write).as_bytes()).await.unwrap();
                     let (response_tx, response_rx) = oneshot::channel();
                     let cmd = Command::Echo { value: value.as_bytes().to_vec(), respond_to: response_tx };
-                    tx.send(cmd).await.unwrap();
+                    let _ = tx.send(cmd).await;
                     let res = response_rx.await.unwrap();
 
                     let bs = [format!("${}\r\n", res.len()).as_bytes() , res.as_slice() , b"\r\n"].concat();
@@ -64,7 +64,7 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                         }
 
                         // let cmd = Command::Set { key: key.to_vec(), value: value.to_vec(), respond_to: response_tx };
-                        tx.send(cmd).await.unwrap();
+                        let _ = tx.send(cmd).await;
                         let res = response_rx.await.unwrap();
 
                         socket.write_all(b"+OK\r\n").await.unwrap();
@@ -73,7 +73,7 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     let (response_tx, response_rx) = oneshot::channel();
                     if let Some(key) = arr[1].as_command() {
                         let cmd = Command::Get { key: key.to_vec(), respond_to: response_tx };
-                        tx.send(cmd).await.unwrap();
+                        let _ = tx.send(cmd).await;
                         let res = response_rx.await.unwrap();
                         match res {
                             Some(res) => {
@@ -93,7 +93,7 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     }
                     let (response_tx, response_rx) = oneshot::channel();
                     let cmd = Command::RPUSH { list_name: list_name.as_bytes().to_vec(), value_list: value_list, respond_to: response_tx };
-                    tx.send(cmd).await.unwrap();
+                    let _ = tx.send(cmd).await;
                     let res = response_rx.await.unwrap();
                     socket.write_all(format!(":{}\r\n", res).as_bytes()).await.unwrap();
                     
@@ -105,7 +105,7 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     }
                     let (response_tx, response_rx) = oneshot::channel();
                     let cmd = Command::LPUSH { list_name: list_name.as_bytes().to_vec(), value_list: value_list, respond_to: response_tx };
-                    tx.send(cmd).await.unwrap();
+                    let _ = tx.send(cmd).await;
                     let res = response_rx.await.unwrap();
                     socket.write_all(format!(":{}\r\n", res).as_bytes()).await.unwrap();
                 } else if arr[0].as_command() == Some(b"LRANGE") && arr.len() > 3 {
@@ -114,14 +114,14 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     let end_index: i32 = str::from_utf8(arr[3].as_command().unwrap()).unwrap().parse().unwrap();
                     let (response_tx, response_rx) = oneshot::channel();
                     let cmd = Command::LRange { list_name: list_name, start_index, end_index, respond_to: response_tx };
-                    tx.send(cmd).await.unwrap();
+                    let _ = tx.send(cmd).await;
                     let res = response_rx.await.unwrap();
                     socket.write_all(res.as_slice()).await.unwrap();
                 } else if arr[0].as_command() == Some(b"LLEN") && arr.len() > 1 {
                     let list_name = arr[1].as_command().clone().unwrap().to_vec();
                     let (response_tx, response_rx) = oneshot::channel();
                     let cmd = Command::LLen { list_name, respond_to: response_tx };
-                    tx.send(cmd).await.unwrap();
+                    let _ = tx.send(cmd).await;
                     let res = response_rx.await.unwrap();
                     let mut buf = Vec::<u8>::new();
                     write!(&mut buf, ":{}\r\n", res);
@@ -131,11 +131,11 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     let (response_tx, response_rx) = oneshot::channel();
                     
                     let no_of_elements = match arr.get(2) {
-                        Some(e) => Some(str::from_utf8(e.as_command().unwrap()).unwrap().parse().unwrap()),
-                        None => None
+                        Some(e) => Some(str::from_utf8(e.as_command().unwrap()).unwrap().parse::<i32>().unwrap()),
+                        None => None,
                     };
                     let cmd  = Command::LPOP { list_name, no_of_elements: no_of_elements, respond_to: response_tx };
-                    tx.send(cmd).await.unwrap();
+                    let _ = tx.send(cmd).await;
                     let res = response_rx.await.unwrap();
                     socket.write_all(&res).await.unwrap();
                 } else if arr[0].as_command() == Some(b"BLPOP") && arr.len() > 1 {
@@ -151,11 +151,18 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                         s => Some(Duration::from_secs_f32(s))
                     }; 
                     let cmd  = Command::BLPOP { list_name, exp_time, respond_to: response_tx };
-                    tx.send(cmd).await.unwrap();
+                    let _ = tx.send(cmd).await;
                     
                     let res = response_rx.await.unwrap();
                     socket.write_all(&res).await.unwrap();
                     println!("bbbb");
+                } else if arr[0].as_command() == Some(b"TYPE") {
+                    let (response_tx, response_rx) = oneshot::channel();
+                    let cmd = Command::TYPE { key: arr[1].as_command().unwrap().to_vec(), respond_to:  response_tx};
+                    let _ = tx.send(cmd).await;
+                    let res = response_rx.await.unwrap();
+                    socket.write_all(&res).await.unwrap();
+                    
                 }
             }
             _ => {},

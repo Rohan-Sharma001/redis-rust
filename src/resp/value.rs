@@ -5,7 +5,7 @@ pub enum DataObjects {
     Error(String),
     Integer(f64),
     BulkString(Option<Vec<u8>>),
-    Array(Option<Vec<DataObjects>>)
+    Array(Option<Vec<DataObjects>>),
 }
 
 impl DataObjects {
@@ -25,7 +25,8 @@ impl fmt::Display for DataObjects {
             DataObjects::BasicString(str) => write!(f, "{}", str),
             DataObjects::Error(err) => write!(f, "{}", err),
             DataObjects::Integer(int) => write!(f, "{}", int),
-            DataObjects::BulkString(Some(arr)) => write!(f, "{}", String::from_utf8(arr.clone()).unwrap()),
+            DataObjects::BulkString(Some(arr)) =>
+                write!(f, "{}", String::from_utf8(arr.clone()).unwrap()),
             // DataObjects::BulkString(Some(arr)) => write!(f, "{:?}", arr),
             DataObjects::Array(Some(obj_arr)) => {
                 write!(f, "[ ");
@@ -36,8 +37,8 @@ impl fmt::Display for DataObjects {
                 write!(f, "\x08\x08");
                 write!(f, "]");
                 Ok(())
-            },
-            _ => {Ok(())},
+            }
+            _ => { Ok(()) }
         }
     }
 }

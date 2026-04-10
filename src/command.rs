@@ -43,5 +43,9 @@ pub enum Command {
         list_name: Vec<u8>,
         exp_time: Option<std::time::Duration>,
         respond_to: oneshot::Sender<Vec<u8>>
+    },
+    TYPE {
+        key: Vec<u8>,
+        respond_to: oneshot::Sender<Vec<u8>>
     }
 }
