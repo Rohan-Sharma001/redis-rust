@@ -2,7 +2,7 @@
 use core::fmt;
 use std::{array, collections::{HashMap, LinkedList}, ffi::os_str::Display, fmt::write, hash::Hash, io::{Read, Write}, num::ParseIntError, ptr::null, time::Duration, vec};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::oneshot, sync::mpsc, time::Interval};
-use codecrafters_redis::connection_::*;
+use codecrafters_redis::{connection_::*, radx};
 use codecrafters_redis::store::*;
 
 #[tokio::main]
@@ -51,5 +51,15 @@ async fn main() {
     // }
 }
 
-
+// fn main() {
+//     let mut y_ = radx::Node::new();
+//     y_.insert(b"abc");
+//     y_.insert(b"abd");
+//     y_.insert(b"abe");
+//     let k = y_.range(b"a", b"z");
+//     println!("{:?}", y_);
+//     y_.delete(b"abc");
+//     let h = y_.range(b"a", b"z");
+//     println!("{:?}", y_);
+// }
 

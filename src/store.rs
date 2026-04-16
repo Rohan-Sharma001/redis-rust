@@ -1,4 +1,7 @@
-use crate::resp::Data_Storage::{ Data_Storage, Data_Storage::{RedisList, RedisString}};
+use crate::{
+    radx,
+    resp::Data_Storage::Data_Storage::{ self, RedisList, RedisString, RedisStream },
+};
 use crate::{ command::Command };
 use std::collections::LinkedList;
 use std::{
@@ -7,10 +10,7 @@ use std::{
     io::Write,
     time::{ self, Instant },
 };
-use tokio::{
-    sync::mpsc,
-    sync::oneshot,
-};
+use tokio::{ sync::mpsc, sync::oneshot };
 
 struct Waiter {
     deadline: Option<Instant>,
@@ -22,7 +22,7 @@ impl Ord for Waiter {
             (None, None) => Ordering::Equal,
             (_, None) => Ordering::Greater,
             (None, _) => Ordering::Less,
-            (a, b) => b.cmp(a)
+            (a, b) => b.cmp(a),
         }
     }
 }
@@ -43,6 +43,7 @@ pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
     let mut dict: HashMap<Vec<u8>, (Data_Storage, Option<std::time::Instant>)> = HashMap::new();
     // let mut dict_list: HashMap<Vec<u8>, LinkedList<Vec<u8>>> = HashMap::new();
     let mut waiters: HashMap<Vec<u8>, BinaryHeap<Waiter>> = HashMap::new(); //store BLPOP requests
+    // let mut streams_ = radx::RadixT::new();
 
     loop {
         tokio::select! {
@@ -51,18 +52,18 @@ pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                 let now_ts = std::time::Instant::now();
                 match cmd {
                     Command::Get {key, respond_to}=> {
-                        let val_pair = dict.get(&key).cloned();
+                        let val_pair = dict.get(&key);
                         match val_pair {
                             Some((RedisString(val), Some(ts))) => {
                                 println!("{:?}....{:?}", now_ts, ts);
-                                if now_ts > ts {
+                                if now_ts > *ts {
                                     let _ = respond_to.send(None);
                                 } else {
-                                    let _ = respond_to.send(Some(val));
+                                    let _ = respond_to.send(Some((*val).clone()));
                                 }
                             },
                             Some((RedisString(val), None)) => {
-                                let _ = respond_to.send(Some(val));
+                                let _ = respond_to.send(Some((*val).clone()));
                             }
                             _ => {
                                 let _ = respond_to.send(None);
@@ -199,8 +200,48 @@ pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                         match dict.get(&key) {
                             Some((RedisList(_), ts)) if ts.is_none() || *ts >= Some(now_ts) => {let _ = respond_to.send(b"+list\r\n".to_vec());}
                             Some((RedisString(_), ts)) if ts.is_none() || *ts >= Some(now_ts) => {let _ = respond_to.send(b"+string\r\n".to_vec());}
+                            Some((RedisStream(_), ts)) if ts.is_none() || *ts >= Some(now_ts) => {let _ = respond_to.send(b"+stream\r\n".to_vec());}
+
                             _ => {let _ = respond_to.send(b"+none\r\n".to_vec());}
                         }
+                    },
+                    Command::XADD {key, stream_id, value_pairs, respond_to} => {
+                        // if !streams_.search(&key) {
+                        //     streams_.insert(&key);
+                        // }
+                        // let it_ = streams_.iterator(&key).unwrap();
+                        match dict.get_mut(&key) {
+                            Some((RedisStream(rs_), ts)) if (ts.is_none() | (*ts >= Some(Instant::now())))  => {
+                                if !rs_.search(&stream_id) {
+                                    rs_.insert(&stream_id);
+                                }
+                                let it_ = rs_.iterator(&stream_id).unwrap();
+                                for x in value_pairs {
+                                    it_.insert(x.0, x.1);
+                                }
+                            },
+                            
+                            Some((_, ts)) if (ts.is_none() | (*ts >= Some(Instant::now()))) => {
+                                let _ = respond_to.send(b"+Error\r\n".to_vec());
+                                continue;
+                            },
+                            _ => {
+                                let mut rs_ = radx::RadixT::new();
+                                rs_.insert(&stream_id);
+                                println!("{:?}", rs_);
+                                let it_ = rs_.iterator(&stream_id).unwrap();
+                                for x in value_pairs {
+                                    it_.insert(x.0, x.1);
+                                }
+                                dict.insert(key.clone(), (RedisStream(rs_), None));
+                            }
+                        }
+                        let mut buf = Vec::<u8>::new();
+                        write!(&mut buf, "${}\r\n", stream_id.len());
+                        buf.extend_from_slice(&stream_id);
+                        buf.extend_from_slice(b"\r\n");
+                        let _ = respond_to.send(buf);
+                        continue;
                     }
                 }
             },

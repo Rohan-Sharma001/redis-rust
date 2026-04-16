@@ -47,5 +47,11 @@ pub enum Command {
     TYPE {
         key: Vec<u8>,
         respond_to: oneshot::Sender<Vec<u8>>
+    },
+    XADD {
+        key: Vec<u8>,
+        stream_id: Vec<u8>,
+        value_pairs: Vec<(Vec<u8>, Vec<u8>)>,
+        respond_to: oneshot::Sender<Vec<u8>>
     }
 }
