@@ -38,9 +38,31 @@ impl PartialEq for Waiter {
     }
 }
 impl Eq for Waiter {}
+fn toINT(v_: &[u8]) -> (u64, u64) {
+    let mut int_: u64 = 0;
+    let mut int2_: u64 = 0;
+    let mut d_ = false;
+    for x in v_.iter().rev() {
+        if (*x as char) == '-' {
+            d_ = true;
+            continue;
+        }
+        if (*x as char) <= '9' && (*x as char) >= '0' {
+            if !d_ {
+                int_ = int_ * 10;
+                int_ = int_ + ((x - ('0' as u8)) as u64);
+            } else {
+                int2_ = int2_ * 10;
+                int2_ = int2_ + ((x - ('0' as u8)) as u64);
+            }
+        }
+    }
+    return (int2_, int_);
+}
 
 pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
     let mut dict: HashMap<Vec<u8>, (Data_Storage, Option<std::time::Instant>)> = HashMap::new();
+    let mut lastID: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
     // let mut dict_list: HashMap<Vec<u8>, LinkedList<Vec<u8>>> = HashMap::new();
     let mut waiters: HashMap<Vec<u8>, BinaryHeap<Waiter>> = HashMap::new(); //store BLPOP requests
     // let mut streams_ = radx::RadixT::new();
@@ -122,7 +144,7 @@ pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                             }
                             start_index = ((start_index % n) + n)%n;
                             end_index = ((end_index % n) + n)%n;
-                            println!("{:?}", rl_);
+                            // println!("{:?}", rl_);
                             if start_index > end_index {
                                 let _ = respond_to.send(b"*0\r\n".to_vec());
                                 continue;
@@ -206,13 +228,27 @@ pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                         }
                     },
                     Command::XADD {key, stream_id, value_pairs, respond_to} => {
-                        // if !streams_.search(&key) {
-                        //     streams_.insert(&key);
-                        // }
-                        // let it_ = streams_.iterator(&key).unwrap();
+                        match lastID.get_mut(&key) {
+                            Some(_) if toINT(&stream_id) == (0,0) => {
+                                let _ = respond_to.send(b"-ERR The ID specified in XADD must be greater than 0-0\r\n".to_vec());
+                                continue;
+
+                            }
+                            Some(id_) if toINT(id_) >= toINT(&stream_id)  => {
+                                let _ = respond_to.send(b"-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n".to_vec());
+                                continue;
+                            }
+                            
+                            Some(id_) => {
+                                *id_ = stream_id.clone();
+                            }
+                            _ => {
+                                lastID.insert(key.clone(), stream_id.clone());
+                            }
+                        }
                         match dict.get_mut(&key) {
                             Some((RedisStream(rs_), ts)) if (ts.is_none() | (*ts >= Some(Instant::now())))  => {
-                                if !rs_.search(&stream_id) {
+                                if !rs_.search(&stream_id.clone()) {
                                     rs_.insert(&stream_id);
                                 }
                                 let it_ = rs_.iterator(&stream_id).unwrap();
@@ -228,7 +264,7 @@ pub async fn cmd_process(mut rx: mpsc::Receiver<Command>) {
                             _ => {
                                 let mut rs_ = radx::RadixT::new();
                                 rs_.insert(&stream_id);
-                                println!("{:?}", rs_);
+                                // println!("{:?}", rs_);
                                 let it_ = rs_.iterator(&stream_id).unwrap();
                                 for x in value_pairs {
                                     it_.insert(x.0, x.1);

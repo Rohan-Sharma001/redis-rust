@@ -163,6 +163,7 @@ pub async fn connection_(mut socket: TcpStream, mut tx: mpsc::Sender<Command>) {
                     let res = response_rx.await.unwrap();
                     socket.write_all(&res).await.unwrap();
                 } else if arr[0].as_command() == Some(b"XADD") {
+                    
                     let (response_tx, response_rx) = oneshot::channel();
                     let mut kv_: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
                     for i in 3..arr.len()-1 {
